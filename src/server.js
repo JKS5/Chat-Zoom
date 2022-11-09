@@ -2,7 +2,8 @@ import express from "express";
 // 이미 http는 Node에 내장되어 있다
 import http from "http";
 // import WebScoket from "ws";
-import SocketIO from "socket.io";
+import Server from "socket.io";
+import { instrument } from "@socket.io/admin-ui";
 
 const app = express();
 
@@ -17,7 +18,16 @@ const handleListen = () => console.log(`Listening on http:localhost:3000`);
 //이제 express에서 server를 만들었다. (http.createServer(app))
 //이제 const server를 통해 서버에 접근이 가능해진다.
 const httpServer = http.createServer(app);
-const wsServer = SocketIO(httpServer);
+const wsServer = Server(httpServer, {
+  cors: {
+    origin: ["https://admin.socket.io"],
+    credentials: true,
+  },
+});
+
+instrument(wsServer, {
+  auth: false,
+});
 
 function publicRooms() {
   const {
@@ -34,6 +44,10 @@ function publicRooms() {
   return publicRooms;
 }
 
+function countRoom(roomName) {
+  return wsServer.sockets.adapter.rooms.get(roomName).size;
+}
+
 wsServer.on("connection", (socket) => {
   socket["nickname"] = "Anon";
   socket.onAny((event) => {
@@ -43,17 +57,22 @@ wsServer.on("connection", (socket) => {
   socket.on("enter_room", (roomName, done) => {
     socket.join(roomName);
     done();
-    // socket.to(roomName).emit("welcome", socket.nickname);
-    socket.rooms.forEach((room) =>
-      socket.to(room).emit("welcome", (socket.nickname, room))
-    );
+    socket.to(roomName).emit("welcome", socket.nickname, countRoom(roomName));
+    wsServer.sockets.emit("room_change", publicRooms());
+    // socket.rooms.forEach((room) =>
+    //   socket.to(room).emit("welcome", (socket.nickname, room))
+    // );
   });
   socket.on("disconnecting", () => {
     console.log(socket.rooms);
     socket.rooms.forEach((room) =>
-      socket.to(room).emit("bye", socket.nickname)
+      socket.to(room).emit("bye", socket.nickname, countRoom(room) - 1)
     );
   });
+  socket.on("disconnect", () => {
+    wsServer.sockets.emit("room_change", publicRooms());
+  });
+
   socket.on("new_message", (msg, room, done) => {
     socket.to(room).emit("new_message", `${socket.nickname}: ${msg}`);
     done();
